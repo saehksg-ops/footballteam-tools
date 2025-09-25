@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ミニゲーム バランサー | footballteam-tools</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline';">
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#111a2d; --border:#1f2a44; --text:#e5e7eb; --muted:#94a3b8; --accent:#22c55e;
+      --btn:#1f2a44; --btn2:#0b1220;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,'Apple Color Emoji','Segoe UI Emoji';}
+    .wrap{max-width:980px;margin:0 auto;padding:16px 20px}
+    h1{font-size:22px;margin:6px 0 4px;font-weight:700}
+    h2{font-size:18px;margin:0 0 8px;font-weight:700}
+    small{color:var(--muted)}
+    section{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px;margin-top:10px}
+    label{display:inline-block;margin:4px 12px 4px 0}
+    input,textarea{background:#0b1220;border:1px solid var(--border);border-radius:8px;color:var(--text);padding:6px 8px}
+    textarea{width:100%;min-height:180px}
+    button{background:var(--btn);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:8px 12px;margin:4px 4px 0 0;cursor:pointer}
+    button.primary{background:var(--accent);color:#06270f;border-color:#16a34a;font-weight:700}
+    .grid{display:grid;gap:10px}
+    @media(min-width:900px){.grid{grid-template-columns:1fr 1fr}}
+    .team{background:#0e1729;border:1px solid var(--border);border-radius:10px;padding:8px}
+    .badge{display:inline-block;min-width:24px;text-align:center;background:#0b1220;border:1px solid var(--border);border-radius:6px;margin-right:6px}
+    #status{background:#0d1426;border:1px dashed #334155;border-radius:10px;padding:8px;margin-top:8px;white-space:pre-wrap}
+    .banner{background:#0f2948;border:1px solid #1e3a8a;border-radius:10px;padding:8px;margin-bottom:8px}
+    footer{margin:14px 0 6px 0;color:var(--muted);font-size:12px;display:flex;gap:8px;flex-wrap:wrap}
+    a{color:#93c5fd}
+    .disabled{opacity:.6;pointer-events:none}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div id="banner" class="banner" style="display:none"></div>
+  <h1>ミニゲーム バランサー（footballteam-tools）</h1>
+  <small>人数・実力・希望ポジで均等なチーム分けを作ります。ブラウザのみで動作（外部送信なし）。</small>
+  <div id="status">準備中...</div>
+
+  <section>
+    <h2>名簿</h2>
+    <small>1行1人：<b>名前, 評価(1–5), 位置(GK/DF/MF/FW)</b>（後ろ2つは省略可）<br>区切りは <code>,</code> / <code>，</code> / <code>、</code> / <code>・</code> に対応。全角英数は自動で半角化。</small>
+    <textarea id="roster" placeholder="例&#10;山田太郎,4,FW&#10;佐藤花子,3,MF"></textarea><br/>
+    <div>
+      <button id="btnSample">サンプル挿入</button>
+      <button id="btnSave">名簿を保存</button>
+      <button id="btnLoad">保存から読み込み</button>
+      <button id="btnClear">全消去</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>オプション</h2>
+    <label>チーム数 <input id="teamCount" type="number" min="2" max="8" value="2" style="width:70px"></label>
+    <label>試行回数 <input id="tries" type="number" min="1" max="2000" value="300" style="width:90px"></label>
+    <label><input id="enforceGK" type="checkbox" checked> GKは各チーム最大1</label>
+    <label><input id="snakeDraft" type="checkbox" checked> スネーク配分</label><br/>
+    <label>チーム名 <input id="teamNames" placeholder="赤, 青, 緑" style="width:240px"></label><br/>
+    <div>
+      <button id="btnBalance" class="primary">バランス分けを実行</button>
+      <button id="btnAnother">別案を提案</button>
+      <button id="btnCopy">テキストをコピー</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>結果</h2>
+    <div id="scoreLine"><small>未生成</small></div>
+    <div id="out" class="grid"></div>
+  </section>
+
+  <footer>
+    <span id="version"></span>
+    <a href="legal/terms.html">利用規約</a>
+    <a href="legal/privacy.html">プライバシー</a>
+    <a href="https://github.com/" target="_blank" rel="noopener">GitHub Pages</a>
+  </footer>
+</div>
+
+<script>
+const APP_VERSION = '1.2.0';
+document.getElementById('version').textContent = 'v' + APP_VERSION;
+
+const $ = s => document.querySelector(s);
+const clamp = (n,a,b)=>Math.min(Math.max(n,a),b);
+function toHalfWidth(str){ return str.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)); }
+function normalizePos(s){
+  if(!s) return '';
+  const t = toHalfWidth(String(s)).toUpperCase().trim();
+  if (t === 'ＧＫ') return 'GK'; if (t === 'ＤＦ') return 'DF'; if (t === 'ＭＦ') return 'MF'; if (t === 'ＦＷ') return 'FW';
+  if (/^(GK|ＧＫ|KEEPER|ｷｰﾊﾟｰ|ｷｰﾊﾟ)$/.test(t)) return 'GK';
+  if (/^DF|ＤＦ$/.test(t)) return 'DF';
+  if (/^MF|ＭＦ$/.test(t)) return 'MF';
+  if (/^FW|ＦＷ$/.test(t)) return 'FW';
+  return t.replace(/[^A-Z]/g,'');
+}
+function splitLines(text){ return String(text).replace(/
+| | ||
+/g, '
+').split('
+'); }
+function parseRoster(text){
+  const lines = splitLines(text).map(s=>s.trim()).filter(s=>/\S/.test(s));
+  const roster = [];
+  for(const line of lines){
+    const parts = toHalfWidth(line).split(/[,，、・]/).map(s=>s.trim()).filter(Boolean);
+    if (!parts.length) continue;
+    const name = parts[0];
+    let rating = 3, pos = '';
+    if (parts.length >= 2){
+      const maybe = Number(parts[1]);
+      if (Number.isFinite(maybe)) rating = clamp(Math.round(maybe),1,5);
+      else pos = normalizePos(parts[1]);
+    }
+    if (parts.length >= 3){ pos = normalizePos(parts[2]); }
+    roster.push({ name, rating, pos });
+  }
+  return roster;
+}
+function mulberry32(seed){return function(){let t=seed+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return ((t^t>>>14)>>>0)/4294967296;}}
+function shuffle(a,rng){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+function stddev(nums){ const n=nums.length; if(!n) return 0; const m=nums.reduce((a,b)=>a+b,0)/n; const v=nums.reduce((a,b)=>a+(b-m)*(b-m),0)/n; return Math.sqrt(v); }
+function teamObjective(teams,enforceGK){
+  const sums = teams.map(t=>t.reduce((s,p)=>s+p.rating,0));
+  let sc = stddev(sums);
+  if(enforceGK){ for(const t of teams){ const g=t.filter(p=>/^GK$/i.test(p.pos)).length; if(g>1) sc += (g-1) * 0.5; } }
+  const sizes = teams.map(t=>t.length); sc += stddev(sizes)*0.3;
+  return sc;
+}
+function snakeDistribute(players,k){
+  const teams = Array.from({length:k},()=>[]);
+  let dir=1, idx=0;
+  for(const p of players){
+    teams[idx].push(p);
+    if(dir===1){ if(idx===k-1){dir=-1;} else idx++; }
+    else { if(idx===0){dir=1;} else idx--; }
+  }
+  return teams;
+}
+function randomAssign(players,k,rng){
+  const arr = players.slice(); shuffle(arr, rng);
+  const teams = Array.from({length:k},()=>[]);
+  for(let i=0;i<arr.length;i++) teams[i%k].push(arr[i]);
+  return teams;
+}
+function optimizeTeams(roster,k,tries,useSnake,enforceGK){
+  const seeded = mulberry32(Math.floor(Math.random()*1e9));
+  let best=null, bestScore=Infinity;
+  for(let t=0;t<tries;t++){
+    let teams;
+    if(useSnake){
+      const sorted = roster.slice().sort((a,b)=> b.rating-a.rating || a.name.localeCompare(b.name));
+      const arr = shuffle(sorted, seeded);
+      teams = snakeDistribute(arr, k);
+    } else {
+      teams = randomAssign(roster, k, seeded);
+    }
+    const score = teamObjective(teams, enforceGK);
+    if(score<bestScore){ bestScore=score; best=teams; }
+  }
+  return {teams:best, score:bestScore};
+}
+let lastTeams = null;
+function renderTeams(container, teams, names){
+  container.textContent = '';
+  teams.forEach((team,i)=>{
+    const card = document.createElement('div'); card.className='team';
+    const title = names[i] || String.fromCharCode(65+i);
+    const sum = team.reduce((s,p)=>s+p.rating,0);
+    const avg = team.length? (sum/team.length).toFixed(2):'0.00';
+    const head = document.createElement('div');
+    const left = document.createElement('b'); left.textContent = 'チーム ' + title;
+    const right = document.createElement('small'); right.style.color = '#94a3b8'; right.textContent = `合計${sum}/平均${avg}`;
+    head.appendChild(left); head.appendChild(document.createTextNode(' ')); head.appendChild(right);
+    card.appendChild(head);
+    const ol = document.createElement('ol'); ol.style.paddingLeft = '18px'; ol.style.margin = '6px 0'; ol.style.display = 'grid'; ol.style.gap = '6px';
+    team.forEach(p=>{
+      const li = document.createElement('li');
+      const badge = document.createElement('span'); badge.className='badge'; badge.textContent = String(p.rating);
+      li.appendChild(badge);
+      li.appendChild(document.createTextNode(' ' + p.name + ' '));
+      if (p.pos){
+        const pos = document.createElement('small'); pos.style.color = '#94a3b8'; pos.textContent = '[' + p.pos + ']';
+        li.appendChild(pos);
+      }
+      ol.appendChild(li);
+    });
+    card.appendChild(ol);
+    container.appendChild(card);
+  });
+}
+function teamNamesFromInput(){
+  const raw = $('#teamNames').value.trim();
+  if(!raw) return [];
+  return splitLines(raw.replace(/[、，]/g, ',')).join(',').split(',').map(s=>s.trim()).filter(Boolean);
+}
+function setStatus(text){ $('#status').textContent = text; }
+function setButtonsEnabled(enabled){
+  const ids = ['btnSample','btnSave','btnLoad','btnClear','btnBalance','btnAnother','btnCopy'];
+  ids.forEach(id=>{
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (enabled){ el.classList.remove('disabled'); el.disabled = false; }
+    else { el.classList.add('disabled'); el.disabled = true; }
+  });
+}
+function runBalance(){
+  const roster = parseRoster($('#roster').value);
+  const k = clamp(parseInt($('#teamCount').value||'2',10),2,8);
+  const tries = clamp(parseInt($('#tries').value||'200',10),1,2000);
+  const enforceGK = $('#enforceGK').checked;
+  const useSnake = $('#snakeDraft').checked;
+  setStatus(`クリック受理 / 入力行数:${splitLines($('#roster').value).filter(s=>/\S/.test(s)).length} / 解釈:${roster.length} / チーム数:${k}`);
+  if (roster.length < k){ alert('人数がチーム数より少ないです。'); return; }
+  const {teams} = optimizeTeams(roster,k,tries,useSnake,enforceGK);
+  lastTeams = teams;
+  const names = teamNamesFromInput();
+  renderTeams($('#out'), teams, names);
+  const sums = teams.map(t=>t.reduce((s,p)=>s+p.rating,0));
+  const balance = stddev(sums);
+  $('#scoreLine').textContent = `均等度（合計評価の標準偏差）: ${balance.toFixed(3)} ／ チーム数: ${k} ／ 人数: ${roster.length}`;
+  setStatus($('#status').textContent + '\nOK: 生成完了');
+}
+function copyText(){
+  if (!lastTeams){ alert('先に分けてください。'); return; }
+  const names = teamNamesFromInput();
+  let text='';
+  lastTeams.forEach((team,i)=>{
+    const title = names[i] || String.fromCharCode(65+i);
+    const sum = team.reduce((s,p)=>s+p.rating,0);
+    const avg = team.length? (sum/team.length).toFixed(2):'0.00';
+    text += `=== チーム ${title} (合計${sum} / 平均${avg}) ===\n`;
+    team.forEach(p=>{ text += `・${p.name}（${p.rating}${p.pos? ', '+p.pos:''}）\n`; });
+    text += '\n';
+  });
+  navigator.clipboard.writeText(text).then(()=>alert('コピーしました')).catch(()=>alert('コピーに失敗しました'));
+}
+async function loadStatusJson(){
+  try{
+    const res = await fetch('status.json', {cache:'no-store'});
+    if (!res.ok) { setStatus('準備完了（status.jsonなし）'); return; }
+    const s = await res.json();
+    if (s.banner){ const el = $('#banner'); el.style.display='block'; el.textContent = s.banner; }
+    if (s.kill_switch){ setButtonsEnabled(false); setStatus('緊急停止中（kill_switch）'); return; }
+    if (s.maintenance){ setButtonsEnabled(false); setStatus('メンテナンス中'); } else { setButtonsEnabled(true); setStatus('準備完了'); }
+    if (s.force_upgrade_min_version && compareVersions(APP_VERSION, s.force_upgrade_min_version) < 0){
+      alert('新しいバージョンがあります。画面を再読み込みしてください。');
+    }
+  }catch(e){
+    setStatus('準備完了（status.json読み込み失敗: ' + e.message + '）');
+  }
+}
+function compareVersions(a,b){
+  if(!b) return 1;
+  const pa = String(a).split('.').map(n=>parseInt(n,10));
+  const pb = String(b).split('.').map(n=>parseInt(n,10));
+  for (let i=0;i<Math.max(pa.length,pb.length);i++){
+    const x = pa[i]||0, y = pb[i]||0;
+    if (x>y) return 1; if (x<y) return -1;
+  }
+  return 0;
+}
+function init(){
+  document.getElementById('btnSample').addEventListener('click', ()=>{
+    $('#roster').value = [
+      '山田蓮,3,GK','橋本快,3,GK','佐藤太一,5,FW','中村蒼,5,FW','松本隼,4,FW','斎藤芽衣,2,FW',
+      '吉田陸,4,MF','高橋海斗,2,MF','伊藤陽菜,3,MF','加藤琴音,3,MF','清水翼,3,MF','鈴木悠真,3,MF',
+      '田中健,4,DF','渡辺直人,4,DF','山本玲央,3,DF','小林晃,2,DF','井上涼,3,DF','木村瑠奈,2,MF','林大和,4,DF','佐々木光,5,DF'
+    ].join('\n');
+  });
+  document.getElementById('btnSave').addEventListener('click', ()=>{
+    localStorage.setItem('ftt/roster', $('#roster').value);
+    alert('名簿を保存しました（この端末内）。');
+  });
+  document.getElementById('btnLoad').addEventListener('click', ()=>{
+    const v = localStorage.getItem('ftt/roster'); if (v) $('#roster').value = v; else alert('保存データがありません。');
+  });
+  document.getElementById('btnClear').addEventListener('click', ()=>{ $('#roster').value=''; });
+  document.getElementById('btnBalance').addEventListener('click', runBalance);
+  document.getElementById('btnAnother').addEventListener('click', runBalance);
+  document.getElementById('btnCopy').addEventListener('click', copyText);
+  loadStatusJson();
+  setStatus('準備中...');
+}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

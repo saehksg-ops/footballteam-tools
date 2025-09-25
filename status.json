@@ -1,0 +1,7 @@
+{
+  "version": "1.2.0",
+  "banner": "9/1(日) 03:00-03:10 メンテナンス予定",
+  "maintenance": false,
+  "force_upgrade_min_version": "1.2.0",
+  "kill_switch": false
+}
